@@ -42,16 +42,27 @@ def draw_color_contours(source, target, color_dict, min_area, text_color=(0, 0, 
     font_scale = 1.25
     thickness = 1
     spacing = 5.5 * font_scale
+    padding = 5
 
     for contour, (center, radius), number in results:
-        cv2.circle(output, center, int(radius), (0, 0, 255), 1)
-        cv2.circle(output, center, 2, (0, 0, 255), 2)
+        # cv2.circle(output, center, int(radius), (0, 0, 255), 1)
+        # cv2.circle(output, center, 2, (0, 0, 255), 2)
 
         # draw single characters to configure spacing
         color_str = str(number)
         text = [str(c) for c in color_str]
         text_width, text_height = cv2.getTextSize(color_str, font_face, font_scale, thickness)[0]
-        text_origin = (center[0] - int(text_width / 2), center[1] + int(text_height / 2))
+        text_origin = [center[0] - int(text_width / 2), center[1] + int(text_height / 2)]
+
+        if text_origin[0] < 0:
+            text_origin[0] = padding
+        elif text_origin[0] + text_width > output.shape[0]:
+            text_origin[0] = output.shape[0] - text_width - padding
+
+        if text_origin[1] - text_height < 0:
+            text_origin[1] = padding + text_height
+        elif text_origin[1] > output.shape[1]:
+            text_origin[1] = output.shape[1] - text_height - padding
 
         for k, char in enumerate(text):
             coords_x, coords_y = text_origin
@@ -66,6 +77,10 @@ def get_color_contours(source, color_dict, min_area):
     for color, number in color_dict.items():
         mask = cv2.inRange(source, np.array(color), np.array(color))
 
+        # reduce details
+        # mask = cv2.erode(mask, None, iterations=2)
+        # mask = cv2.dilate(mask, None, iterations=2)
+
         contours, hierarchy = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
         if not contours:
@@ -76,8 +91,13 @@ def get_color_contours(source, color_dict, min_area):
             if hierarchy[0][i][3] != -1:
                 continue
 
+            area = cv2.contourArea(contour)
+            perimeter = cv2.arcLength(contour, True)
+
+            aop = area/perimeter if perimeter > 0 else -1
+
             # Skip small contours based on area
-            if cv2.contourArea(contour) < min_area:
+            if area < min_area or aop < 1:
                 continue
 
             # Create a mask for the current contour
@@ -96,6 +116,12 @@ def get_color_contours(source, color_dict, min_area):
                         cv2.drawContours(contour_mask, [child], -1, 0, -1)
                     child_idx = hierarchy[0][child_idx][0]
             has_children = has_children and not children_too_small
+
+
+            # name = f"{aop}"
+            # cv2.imshow(name, contour_mask)
+            # cv2.waitKey(0)
+            # cv2.destroyWindow(name)
 
             # Find the largest inscribed circle in the contour mask
             dist_map = cv2.distanceTransform(contour_mask, cv2.DIST_L2, 5)
@@ -122,15 +148,15 @@ def unsharp_mask(image, kernel_size=(5, 5), sigma=1.0, amount=1.0, threshold=0):
 def process_image(image_path):
     image = cv2.imread(image_path, cv2.IMREAD_COLOR_BGR)
     palette = load_palette()
-    palette_dict = {color: i for i, color in enumerate(palette) if True or i in [0, 1, 2, 3, 4]}
+    palette_dict = {color: i for i, color in enumerate(palette) if True or i in [1, 6, 13]}
 
-    image = apply_median_filter(image, kernel_size=13)
-    # image = unsharp_mask(image, amount=1.5)
+    image = apply_median_filter(image, kernel_size=11)
+    image = unsharp_mask(image, amount=1.5)
     print('Preprocessed')
     quantized_image = quantize_colors(image, palette).astype('uint8')
     print('Quantized')
     contour_image = np.full_like(quantized_image, 255)
-    image = draw_color_contours(quantized_image, contour_image, palette_dict, 50)
+    image = draw_color_contours(quantized_image, contour_image, palette_dict, 70)
     print('Generated contours')
 
     cv2.imwrite("output_quantized.png", quantized_image)
