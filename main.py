@@ -117,7 +117,6 @@ def get_color_contours(source, color_dict, min_area):
                     child_idx = hierarchy[0][child_idx][0]
             has_children = has_children and not children_too_small
 
-
             # name = f"{aop}"
             # cv2.imshow(name, contour_mask)
             # cv2.waitKey(0)
@@ -131,6 +130,51 @@ def get_color_contours(source, color_dict, min_area):
                 yield contour, (center, radius), number
             else:
                 print('dafuq')
+
+
+def create_color_table(colors, cell_size=120, spacing=15):
+    """
+    Create a table visualization of colors with their indices.
+
+    Args:
+        colors: List of RGB tuples (r,g,b)
+        cell_size: Size of each color square
+        spacing: Space between cells
+
+    Returns:
+        BGR image ready for saving
+    """
+    num_colors = len(colors)
+
+    # Calculate total height needed
+    total_height = num_colors * (cell_size + spacing) + spacing
+
+    # Create blank white background
+    img = np.ones((total_height, cell_size * 2 + spacing, 3), dtype=np.uint8) * 255
+
+    # Draw color squares and numbers
+    for i, (color, number) in enumerate(colors.items()):
+        y_pos = spacing + i * (cell_size + spacing)
+
+        # Draw filled rectangle for color
+        cv2.rectangle(img,
+                      pt1=(spacing, y_pos),
+                      pt2=(spacing + cell_size, y_pos + cell_size),
+                      color=color,
+                      thickness=-1)
+
+        # Add index number
+        font_scale = cell_size / 100
+        font_thickness = 1
+        cv2.putText(img, f"{number}",
+                    org=(spacing + cell_size + spacing, y_pos + cell_size // 2),
+                    fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                    fontScale=font_scale,
+                    color=(0, 0, 0),
+                    thickness=font_thickness,
+                    lineType=cv2.LINE_AA)
+
+    return img
 
 
 def unsharp_mask(image, kernel_size=(5, 5), sigma=1.0, amount=1.0, threshold=0):
@@ -148,13 +192,21 @@ def unsharp_mask(image, kernel_size=(5, 5), sigma=1.0, amount=1.0, threshold=0):
 def process_image(image_path):
     image = cv2.imread(image_path, cv2.IMREAD_COLOR_BGR)
     palette = load_palette()
-    palette_dict = {color: i for i, color in enumerate(palette) if True or i in [1, 6, 13]}
+    palette_dict = {color: i + 1 for i, color in enumerate(palette) if True or i in [1, 6, 13]}
+
+    palette_image = create_color_table(palette_dict)
+    cv2.imwrite('output_palette.png', palette_image)
+    print('Palette created')
+
+    # return
 
     image = apply_median_filter(image, kernel_size=11)
     image = unsharp_mask(image, amount=1.5)
     print('Preprocessed')
+
     quantized_image = quantize_colors(image, palette).astype('uint8')
     print('Quantized')
+
     contour_image = np.full_like(quantized_image, 255)
     image = draw_color_contours(quantized_image, contour_image, palette_dict, 70)
     print('Generated contours')
