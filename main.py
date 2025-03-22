@@ -1,7 +1,5 @@
 import cv2
 import numpy as np
-from skimage.segmentation import watershed
-from scipy.ndimage import label, center_of_mass
 from scipy.spatial import KDTree
 
 
@@ -26,117 +24,87 @@ def quantize_colors(image, palette):
     tree = KDTree(palette)
     _, indices = tree.query(reshaped)
     quantized = np.array(palette)[indices].reshape(image.shape)
-    return quantized, indices.reshape(image.shape[:2])
+    return quantized
 
 
-def segment_image(image, palette):
-    markers_total = []
+def draw_color_contours(source, target, color_dict, min_area, text_color=(0, 0, 0), contours_color=(170, 170, 170)):
+    output = source.copy() if target is None else target
 
-    # palette = [palette[i] for i in [4, 16]]
+    results = list(get_color_contours(source, color_dict, min_area))
+    contours = list([res[0] for res in results])
+    circles = list([res[1] for res in results])
+    numbers = list([res[2] for res in results])
+    results = zip(contours, circles, numbers)
 
-    for i, color in enumerate(palette):
-        solid_color = np.full_like(image, color)
-        parts = cv2.absdiff(image, solid_color)
+    cv2.drawContours(output, contours, -1, contours_color, 1)
 
-        gray = cv2.cvtColor(parts, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV)
+    font_face = cv2.FONT_HERSHEY_PLAIN
+    font_scale = 1.25
+    thickness = 1
+    spacing = 5.5 * font_scale
 
-        # deal with small areas (calculate closing of image)
-        # thresh = cv2.dilate(thresh, None, iterations=4)
-        # thresh = cv2.erode(thresh, None, iterations=4)
-        thresh = apply_median_filter(thresh, kernel_size=7)
-
-        contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-
-        _, markers = cv2.connectedComponents(thresh)
-
-        markers_total.append((watershed(-gray, markers, mask=thresh), contours))
-
-    return markers_total
-
-
-def draw_labels(image, labels: np.ndarray, indices, contours, contours_color=(0, 255, 0), text_color=(255, 0, 0)):
-    area_threshold = 50
-
-    deleted_contours = [contour for contour in contours if cv2.contourArea(contour) < area_threshold]
-    reduced_contours = [contour for contour in contours if cv2.contourArea(contour) >= area_threshold]
-
-    cv2.drawContours(image, reduced_contours, -1, contours_color, 1)
-
-    labeled, num_features = label(labels)
-
-    for i in range(1, num_features + 1):
-        mask: np.ndarray = (labeled == i).astype(np.uint8)
-        moments = cv2.moments(mask)
-
-        if moments['m00'] == 0:
-            continue
-
-        cx = int(moments['m10'] / moments['m00'])
-        cy = int(moments['m01'] / moments['m00'])
-
-        text_x = cx
-        text_y = cy
-
-        # Проверяем, не попали ли мы во вложенный контур
-        center_color = indices[cy, cx]
-        contour_point = contours[0][:, 0][0]  # Точка для проверки цвета
-        actual_color = indices[contour_point[1], contour_point[0]]
-        # if center_color == actual_color:
-        #     print("match")
-
-        # Проверяем, находится ли центр масс внутри контура
-        in_contour = (any(cv2.pointPolygonTest(contour, (cx, cy), False) >= 0 for contour in contours)
-                      and center_color == actual_color)
-
-        offset = 5
-
-        if not in_contour:
-            # Находим ближайшую точку контура к центру масс
-            best_dist = float('inf')
-            best_point = (cx, cy)
-            for contour in contours:
-                for point in contour[:, 0]:
-                    px, py = point
-                    dist = (cx - px) ** 2 + (cy - py) ** 2  # Евклидово расстояние в квадрате
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_point = (px, py)
-
-            bx, by = best_point
-
-            # Вектор от центра масс к ближайшей точке контура
-            vec_x = bx - cx
-            vec_y = by - cy
-            length = np.hypot(vec_x, vec_y)
-
-            if length > 0:
-                vec_x = int(vec_x / length * offset)
-                vec_y = int(vec_y / length * offset)
-
-            text_x = bx + vec_x
-            text_y = by + vec_y
-
-        in_deleted_contour = any(cv2.pointPolygonTest(contour, (float(text_x), float(text_y)), False) >= 0 for contour in deleted_contours)
-        if in_deleted_contour:
-            continue
+    for contour, (center, radius), number in results:
+        cv2.circle(output, center, int(radius), (0, 0, 255), 1)
+        cv2.circle(output, center, 2, (0, 0, 255), 2)
 
         # draw single characters to configure spacing
-        color_str = str(actual_color)
+        color_str = str(number)
         text = [str(c) for c in color_str]
+        text_width, text_height = cv2.getTextSize(color_str, font_face, font_scale, thickness)[0]
+        text_origin = (center[0] - int(text_width / 2), center[1] + int(text_height / 2))
 
-        fontFace = cv2.FONT_HERSHEY_PLAIN
-        fontScale = 1
-        thickness = 1
-        text_width, text_height = cv2.getTextSize(color_str, fontFace, fontScale, thickness)[0]
-        center_coordinates = (text_x - int(text_width / 2), text_y + int(text_height / 2))
-        spacing = 5.5
+        for k, char in enumerate(text):
+            coords_x, coords_y = text_origin
+            cv2.putText(output, char, (int(coords_x + k * spacing), int(coords_y)), font_face, font_scale,
+                        text_color,
+                        thickness, cv2.LINE_AA)
 
-        for i, char in enumerate(text):
-            coords_x, coords_y = center_coordinates
-            cv2.putText(image, char, (int(coords_x + i * spacing), int(coords_y)), fontFace, fontScale, text_color, thickness, cv2.LINE_AA)
+    return output
 
-    return image
+
+def get_color_contours(source, color_dict, min_area):
+    for color, number in color_dict.items():
+        mask = cv2.inRange(source, np.array(color), np.array(color))
+
+        contours, hierarchy = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+        if not contours:
+            continue
+
+        for i, contour in enumerate(contours):
+            # child contour
+            if hierarchy[0][i][3] != -1:
+                continue
+
+            # Skip small contours based on area
+            if cv2.contourArea(contour) < min_area:
+                continue
+
+            # Create a mask for the current contour
+            contour_mask = np.zeros_like(mask)
+            cv2.drawContours(contour_mask, [contour], -1, 255, -1)
+
+            has_children = hierarchy[0][i][2] != -1
+            children_too_small = False
+            if has_children:
+                child_idx = hierarchy[0][i][2]
+                while child_idx != -1:
+                    # Subtract the child contour from the parent's mask
+                    child = contours[child_idx]
+                    if cv2.contourArea(child) >= min_area:
+                        children_too_small = True
+                        cv2.drawContours(contour_mask, [child], -1, 0, -1)
+                    child_idx = hierarchy[0][child_idx][0]
+            has_children = has_children and not children_too_small
+
+            # Find the largest inscribed circle in the contour mask
+            dist_map = cv2.distanceTransform(contour_mask, cv2.DIST_L2, 5)
+            _, radius, _, center = cv2.minMaxLoc(dist_map)
+
+            if cv2.pointPolygonTest(contour, center, False) >= 0:
+                yield contour, (center, radius), number
+            else:
+                print('dafuq')
 
 
 def unsharp_mask(image, kernel_size=(5, 5), sigma=1.0, amount=1.0, threshold=0):
@@ -151,28 +119,22 @@ def unsharp_mask(image, kernel_size=(5, 5), sigma=1.0, amount=1.0, threshold=0):
     return sharpened
 
 
-def process_image(image_path, num_colors=20):
+def process_image(image_path):
     image = cv2.imread(image_path, cv2.IMREAD_COLOR_BGR)
+    palette = load_palette()
+    palette_dict = {color: i for i, color in enumerate(palette) if True or i in [0, 1, 2, 3, 4]}
+
     image = apply_median_filter(image, kernel_size=13)
     # image = unsharp_mask(image, amount=1.5)
+    print('Preprocessed')
+    quantized_image = quantize_colors(image, palette).astype('uint8')
+    print('Quantized')
+    contour_image = np.full_like(quantized_image, 255)
+    image = draw_color_contours(quantized_image, contour_image, palette_dict, 50)
+    print('Generated contours')
 
-    # palette = extract_palette(image, num_colors)
-    palette = load_palette()
-
-    image, indices = quantize_colors(image, palette)
-
-    image = image.astype(np.uint8)
-
-    cv2.imwrite("output_unmarked.png", image)
-
-    contour_image = np.full_like(image, 255)
-
-    for i, (color_labels, contours) in enumerate(segment_image(image, palette)):
-        contour_image = draw_labels(contour_image, color_labels, indices, contours, contours_color=(200, 200, 200), text_color=(0, 0, 0))
-        image = draw_labels(image, color_labels, indices, contours)
-
-    cv2.imwrite("output.png", contour_image)
-    cv2.imwrite("output_full.png", image)
+    cv2.imwrite("output_quantized.png", quantized_image)
+    cv2.imwrite("output_contours.png", image)
     cv2.imshow("Image", image)
     cv2.waitKey(0)
 
